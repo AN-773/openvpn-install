@@ -1,4 +1,4 @@
-# openvpn-install
+# openvpn-install with tap and tun
 
 ![Test](https://github.com/angristan/openvpn-install/workflows/Test/badge.svg)
 ![Lint](https://github.com/angristan/openvpn-install/workflows/Lint/badge.svg)
