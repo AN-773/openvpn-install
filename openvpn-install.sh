@@ -139,27 +139,8 @@ function installQuestions() {
 		done
 	fi
 
-	echo ""
-	echo "Checking for IPv6 connectivity..."
-	echo ""
-	# "ping6" and "ping -6" availability varies depending on the distribution
-	if type ping6 >/dev/null 2>&1; then
-		PING6="ping6 -c3 ipv6.google.com > /dev/null 2>&1"
-	else
-		PING6="ping -6 -c3 ipv6.google.com > /dev/null 2>&1"
-	fi
-	if eval "$PING6"; then
-		echo "Your host appears to have IPv6 connectivity."
-		SUGGESTION="y"
-	else
-		echo "Your host does not appear to have IPv6 connectivity."
-		SUGGESTION="n"
-	fi
-	echo ""
 	# Ask the user if they want to enable IPv6 regardless its availability.
-	until [[ $IPV6_SUPPORT =~ (y|n) ]]; do
-		read -rp "Do you want to enable IPv6 support (NAT)? [y/n]: " -e -i $SUGGESTION IPV6_SUPPORT
-	done
+	IPV6_SUPPORT="n"
 	echo ""
 	echo "What port do you want OpenVPN to listen to?"
 	echo "   1) Default: 1194"
@@ -720,16 +701,6 @@ ifconfig-pool-persist ipp.txt" >>/etc/openvpn/server.conf
 		fi
 		;;
 	esac
-	echo 'push "redirect-gateway def1 bypass-dhcp"' >>/etc/openvpn/server.conf
-
-	# IPv6 network settings if needed
-	if [[ $IPV6_SUPPORT == 'y' ]]; then
-		echo 'server-ipv6 fd42:42:42:42::/112
-tun-ipv6
-push tun-ipv6
-push "route-ipv6 2000::/3"
-push "redirect-gateway ipv6"' >>/etc/openvpn/server.conf
-	fi
 
 	if [[ $COMPRESSION_ENABLED == "y" ]]; then
 		echo "compress $COMPRESSION_ALG" >>/etc/openvpn/server.conf
@@ -830,13 +801,6 @@ iptables -I INPUT 1 -i tun0 -j ACCEPT
 iptables -I FORWARD 1 -i $NIC -o tun0 -j ACCEPT
 iptables -I FORWARD 1 -i tun0 -o $NIC -j ACCEPT
 iptables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >/etc/iptables/add-openvpn-rules.sh
-
-	if [[ $IPV6_SUPPORT == 'y' ]]; then
-		echo "ip6tables -t nat -I POSTROUTING 1 -s fd42:42:42:42::/112 -o $NIC -j MASQUERADE
-ip6tables -I INPUT 1 -i tun0 -j ACCEPT
-ip6tables -I FORWARD 1 -i $NIC -o tun0 -j ACCEPT
-ip6tables -I FORWARD 1 -i tun0 -o $NIC -j ACCEPT
-ip6tables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >>/etc/iptables/add-openvpn-rules.sh
 	fi
 
 	# Script to remove rules
@@ -847,12 +811,6 @@ iptables -D FORWARD -i $NIC -o tun0 -j ACCEPT
 iptables -D FORWARD -i tun0 -o $NIC -j ACCEPT
 iptables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >/etc/iptables/rm-openvpn-rules.sh
 
-	if [[ $IPV6_SUPPORT == 'y' ]]; then
-		echo "ip6tables -t nat -D POSTROUTING -s fd42:42:42:42::/112 -o $NIC -j MASQUERADE
-ip6tables -D INPUT -i tun0 -j ACCEPT
-ip6tables -D FORWARD -i $NIC -o tun0 -j ACCEPT
-ip6tables -D FORWARD -i tun0 -o $NIC -j ACCEPT
-ip6tables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >>/etc/iptables/rm-openvpn-rules.sh
 	fi
 
 	chmod +x /etc/iptables/add-openvpn-rules.sh
