@@ -16,6 +16,12 @@ function tunAvailable() {
 	fi
 }
 
+function openvpnInstalled() {
+	if [ ! -e /etc/openvpn/installed ]; then
+		return 1
+	fi
+}
+
 function checkOS() {
 	if [[ -e /etc/debian_version ]]; then
 		OS="debian"
@@ -102,6 +108,63 @@ function initialCheck() {
 		exit 1
 	fi
 	checkOS
+	if [[ $OS != "debian" ]]; then
+		echo "Only debian supported"
+		exit 1
+	fi
+}
+
+function askForPort() {
+	# ARGS 1: device name 2: default port
+	if [[ $AUTO_INSTALL == "y" ]]; then
+		PORT_CHOICE="1"
+	else
+		PORT_CHOICE=""
+	fi
+	PORT=0
+	# Ask the user what port to use with TUN 
+	echo ""
+	echo "What port do you want OpenVPN-$1 to listen to?"
+	echo "   1) Default: $2"
+	echo "   2) Custom"
+	echo "   3) Random [49152-65535]"
+	until [[ $PORT_CHOICE =~ ^[1-3]$ ]]; do
+		read -rp "Port choice [1-3]: " -e -i 1 PORT_CHOICE
+	done
+	while true
+	do
+		case $PORT_CHOICE in
+		1)
+			PORT=$2
+			;;
+		2)
+			until [[ $PORT =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ]; do
+				read -rp "Custom port [1-65535]: " -e -i $2 PORT
+			done
+			;;
+		3)
+			# Generate random number within private ports range
+			PORT=$(shuf -i49152-65535 -n1)
+			echo "Random Port: $PORT"
+			;;
+		esac
+		
+		if [[ $1 == "TAP" ]]; then
+			PORT_TAP=$PORT
+		elif [[ $1 == "TUN" ]]; then
+			PORT_TUN=$PORT
+		fi
+
+		if [[ $PORT_TUN == $PORT_TAP ]]; then
+			PORT="-1"
+			if [[ $PORT_CHOICE == "1" ]]; then
+				PORT_CHOICE="2"
+			fi
+			echo "TUN and TAP ports can't be the same"
+		else
+			return
+		fi
+	done
 }
 
 
@@ -141,29 +204,25 @@ function installQuestions() {
 
 	# Ask the user if they want to enable IPv6 regardless its availability.
 	IPV6_SUPPORT="n"
+	# Ask the user if they want tap or tun or both
 	echo ""
-	echo "What port do you want OpenVPN to listen to?"
-	echo "   1) Default: 1194"
-	echo "   2) Custom"
-	echo "   3) Random [49152-65535]"
-	until [[ $PORT_CHOICE =~ ^[1-3]$ ]]; do
-		read -rp "Port choice [1-3]: " -e -i 1 PORT_CHOICE
+	echo "Which device do you want to install openvpn on" 
+	echo "   1) Both: TAP and TUN"
+	echo "   2) TAP"
+	echo "   3) TUN"
+	until [[ $DEVICE =~ ^[1-3]$ ]]; do
+		read -rp "Device [1-3]: " -e -i 1 DEVICE
 	done
-	case $PORT_CHOICE in
-	1)
-		PORT="1194"
-		;;
-	2)
-		until [[ $PORT =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ]; do
-			read -rp "Custom port [1-65535]: " -e -i 1194 PORT
-		done
-		;;
-	3)
-		# Generate random number within private ports range
-		PORT=$(shuf -i49152-65535 -n1)
-		echo "Random Port: $PORT"
-		;;
-	esac
+	if [[ $DEVICE == "1" ]]; then
+		askForPort TAP 1194
+		askForPort TUN 1195
+	elif [[ $DEVICE == "2" ]]; then
+		askForPort TAP 1194
+	elif [[ $DEVICE == "3" ]]; then
+		askForPort TUN 1195
+	fi
+
+
 	echo ""
 	echo "What protocol do you want OpenVPN to use?"
 	echo "UDP is faster. Unless it is not available, you shouldn't use TCP."
@@ -463,13 +522,23 @@ function installQuestions() {
 	fi
 }
 
+function echo-shared() {
+	if [[ $DEVICE == "1" ]]; then
+		echo $1 | tee -a $2-tap$3 >> $2-tun$3
+	elif [[ $DEVICE == "2" ]]; then
+		echo $1 >> $2-tap$3
+	elif [[ $DEVICE == "3" ]]; then
+		echo $1 >> $2-tun$3
+	fi
+}
+
 function installOpenVPN() {
 	if [[ $AUTO_INSTALL == "y" ]]; then
 		# Set default choices so that no questions will be asked.
 		APPROVE_INSTALL=${APPROVE_INSTALL:-y}
 		APPROVE_IP=${APPROVE_IP:-y}
 		IPV6_SUPPORT=${IPV6_SUPPORT:-n}
-		PORT_CHOICE=${PORT_CHOICE:-1}
+		DEVICE=${DEVICE:-1}
 		PROTOCOL_CHOICE=${PROTOCOL_CHOICE:-1}
 		DNS=${DNS:-1}
 		COMPRESSION_ENABLED=${COMPRESSION_ENABLED:-n}
@@ -512,7 +581,7 @@ function installOpenVPN() {
 	# If OpenVPN isn't installed yet, install it. This script is more-or-less
 	# idempotent on multiple runs, but will only install OpenVPN from upstream
 	# the first time.
-	if [[ ! -e /etc/openvpn/server.conf ]]; then
+	if ! openvpnInstalled; then
 		if [[ $OS =~ (debian|ubuntu) ]]; then
 			apt-get update
 			apt-get -y install ca-certificates gnupg
@@ -523,22 +592,22 @@ function installOpenVPN() {
 				apt-get update
 			fi
 			# Ubuntu > 16.04 and Debian > 8 have OpenVPN >= 2.4 without the need of a third party repository.
-			apt-get install -y openvpn iptables openssl wget ca-certificates curl
+			apt-get install -y openvpn iptables openssl wget ca-certificates curl bridge-utils net-tools
 		elif [[ $OS == 'centos' ]]; then
 			yum install -y epel-release
-			yum install -y openvpn iptables openssl wget ca-certificates curl tar 'policycoreutils-python*'
+			yum install -y openvpn iptables openssl wget ca-certificates curl tar bridge-utils net-tools 'policycoreutils-python*'
 		elif [[ $OS == 'oracle' ]]; then
 			yum install -y oracle-epel-release-el8
 			yum-config-manager --enable ol8_developer_EPEL
-			yum install -y openvpn iptables openssl wget ca-certificates curl tar policycoreutils-python-utils
+			yum install -y openvpn iptables openssl wget ca-certificates curl tar policycoreutils-python-utils bridge-utils net-tools
 		elif [[ $OS == 'amzn' ]]; then
 			amazon-linux-extras install -y epel
 			yum install -y openvpn iptables openssl wget ca-certificates curl
 		elif [[ $OS == 'fedora' ]]; then
-			dnf install -y openvpn iptables openssl wget ca-certificates curl policycoreutils-python-utils
+			dnf install -y openvpn iptables openssl wget ca-certificates curl policycoreutils-python-utils bridge-utils net-tools
 		elif [[ $OS == 'arch' ]]; then
 			# Install required dependencies and upgrade the system
-			pacman --needed --noconfirm -Syu openvpn iptables openssl wget ca-certificates curl
+			pacman --needed --noconfirm -Syu openvpn iptables openssl wget ca-certificates curl bridge-utils net-tools
 		fi
 		# An old version of easy-rsa was available by default in some openvpn packages
 		if [[ -d /etc/openvpn/easy-rsa/ ]]; then
@@ -618,15 +687,17 @@ function installOpenVPN() {
 	# Make cert revocation list readable for non-root
 	chmod 644 /etc/openvpn/crl.pem
 
-	# Generate server.conf
-	echo "port $PORT" >/etc/openvpn/server.conf
-	if [[ $IPV6_SUPPORT == 'n' ]]; then
-		echo "proto $PROTOCOL" >>/etc/openvpn/server.conf
-	elif [[ $IPV6_SUPPORT == 'y' ]]; then
-		echo "proto ${PROTOCOL}6" >>/etc/openvpn/server.conf
+	# Generate server-tap.conf
+	if [[ $DEVICE == "1" || $DEVICE == "2" ]]; then
+		echo "port $PORT_TAP" >/etc/openvpn/server-tap.conf
+		echo "proto $PROTOCOL" >>/etc/openvpn/server-tap.conf
 	fi
-
-	echo "dev tun
+	if [[ $DEVICE == "1" || $DEVICE == "3" ]]; then
+		echo "port $PORT_TUN" >/etc/openvpn/server-tun.conf
+		echo "proto $PROTOCOL" >>/etc/openvpn/server-tun.conf
+	fi
+	if [[ $DEVICE == "1" || $DEVICE == "3" ]]; then
+		echo "dev tun
 user nobody
 group $NOGROUP
 persist-key
@@ -634,7 +705,20 @@ persist-tun
 keepalive 10 120
 topology subnet
 server 10.8.0.0 255.255.255.0
-ifconfig-pool-persist ipp.txt" >>/etc/openvpn/server.conf
+ifconfig-pool-persist ipp.txt" >>/etc/openvpn/server-tun.conf
+	fi
+	if [[ $DEVICE == "1" ]] || [[ $DEVICE == "2" ]]; then
+		echo "dev tap0
+user nobody
+group $NOGROUP
+persist-key
+persist-tun
+keepalive 10 120
+client-to-client
+topology subnet
+server-bridge 192.168.10.1 255.255.255.0 192.168.10.2 192.168.10.250
+ifconfig-pool-persist ipp.txt" >>/etc/openvpn/server-tap.conf
+	fi
 
 	# DNS resolvers
 	case $DNS in
@@ -650,91 +734,93 @@ ifconfig-pool-persist ipp.txt" >>/etc/openvpn/server.conf
 		sed -ne 's/^nameserver[[:space:]]\+\([^[:space:]]\+\).*$/\1/p' $RESOLVCONF | while read -r line; do
 			# Copy, if it's a IPv4 |or| if IPv6 is enabled, IPv4/IPv6 does not matter
 			if [[ $line =~ ^[0-9.]*$ ]] || [[ $IPV6_SUPPORT == 'y' ]]; then
-				echo "push \"dhcp-option DNS $line\"" >>/etc/openvpn/server.conf
+				echo-shared "push \"dhcp-option DNS $line\"" "/etc/openvpn/server" ".conf"
 			fi
 		done
 		;;
 	2) # Cloudflare
-		echo 'push "dhcp-option DNS 1.0.0.1"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 1.1.1.1"' >>/etc/openvpn/server.conf
+		echo-shared 'push "dhcp-option DNS 1.0.0.1"' "/etc/openvpn/server" ".conf"
+		echo-shared 'push "dhcp-option DNS 1.1.1.1"' "/etc/openvpn/server" ".conf"
 		;;
 	3) # Quad9
-		echo 'push "dhcp-option DNS 9.9.9.9"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 149.112.112.112"' >>/etc/openvpn/server.conf
+		echo-shared 'push "dhcp-option DNS 9.9.9.9"' "/etc/openvpn/server" ".conf"
+		echo-shared 'push "dhcp-option DNS 149.112.112.112"' "/etc/openvpn/server" ".conf"
 		;;
 	4) # Quad9 uncensored
-		echo 'push "dhcp-option DNS 9.9.9.10"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 149.112.112.10"' >>/etc/openvpn/server.conf
+		echo-shared 'push "dhcp-option DNS 9.9.9.10"' "/etc/openvpn/server" ".conf"
+		echo-shared 'push "dhcp-option DNS 149.112.112.10"' "/etc/openvpn/server" ".conf"
 		;;
 	5) # FDN
-		echo 'push "dhcp-option DNS 80.67.169.40"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 80.67.169.12"' >>/etc/openvpn/server.conf
+		echo-shared 'push "dhcp-option DNS 80.67.169.40"' "/etc/openvpn/server" ".conf"
+		echo-shared 'push "dhcp-option DNS 80.67.169.12"' "/etc/openvpn/server" ".conf"
 		;;
 	6) # DNS.WATCH
-		echo 'push "dhcp-option DNS 84.200.69.80"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 84.200.70.40"' >>/etc/openvpn/server.conf
+		echo-shared 'push "dhcp-option DNS 84.200.69.80"' "/etc/openvpn/server" ".conf"
+		echo-shared 'push "dhcp-option DNS 84.200.70.40"' "/etc/openvpn/server" ".conf"
 		;;
 	7) # OpenDNS
-		echo 'push "dhcp-option DNS 208.67.222.222"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 208.67.220.220"' >>/etc/openvpn/server.conf
+		echo-shared 'push "dhcp-option DNS 208.67.222.222"' "/etc/openvpn/server" ".conf"
+		echo-shared 'push "dhcp-option DNS 208.67.220.220"' "/etc/openvpn/server" ".conf"
 		;;
 	8) # Google
-		echo 'push "dhcp-option DNS 8.8.8.8"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 8.8.4.4"' >>/etc/openvpn/server.conf
+		echo-shared 'push "dhcp-option DNS 8.8.8.8"' "/etc/openvpn/server" ".conf"
+		echo-shared 'push "dhcp-option DNS 8.8.4.4"' "/etc/openvpn/server" ".conf"
 		;;
 	9) # Yandex Basic
-		echo 'push "dhcp-option DNS 77.88.8.8"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 77.88.8.1"' >>/etc/openvpn/server.conf
+		echo-shared 'push "dhcp-option DNS 77.88.8.8"' "/etc/openvpn/server" ".conf"
+		echo-shared 'push "dhcp-option DNS 77.88.8.1"' "/etc/openvpn/server" ".conf"
 		;;
 	10) # AdGuard DNS
-		echo 'push "dhcp-option DNS 94.140.14.14"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 94.140.15.15"' >>/etc/openvpn/server.conf
+		echo-shared 'push "dhcp-option DNS 94.140.14.14"' "/etc/openvpn/server" ".conf"
+		echo-shared 'push "dhcp-option DNS 94.140.15.15"' "/etc/openvpn/server" ".conf"
 		;;
 	11) # NextDNS
-		echo 'push "dhcp-option DNS 45.90.28.167"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 45.90.30.167"' >>/etc/openvpn/server.conf
+		echo-shared 'push "dhcp-option DNS 45.90.28.167"' "/etc/openvpn/server" ".conf"
+		echo-shared 'push "dhcp-option DNS 45.90.30.167"' "/etc/openvpn/server" ".conf"
 		;;
 	12) # Custom DNS
-		echo "push \"dhcp-option DNS $DNS1\"" >>/etc/openvpn/server.conf
+		echo-shared "push \"dhcp-option DNS $DNS1\"" "/etc/openvpn/server" ".conf"
 		if [[ $DNS2 != "" ]]; then
-			echo "push \"dhcp-option DNS $DNS2\"" >>/etc/openvpn/server.conf
+			echo-shared "push \"dhcp-option DNS $DNS2\"" "/etc/openvpn/server" ".conf"
 		fi
 		;;
 	esac
+	echo-shared 'push "redirect-gateway def1 bypass-dhcp"' "/etc/openvpn/server" ".conf"
 
 	if [[ $COMPRESSION_ENABLED == "y" ]]; then
-		echo "compress $COMPRESSION_ALG" >>/etc/openvpn/server.conf
+		echo-shared "compress $COMPRESSION_ALG" "/etc/openvpn/server" ".conf"
 	fi
 
 	if [[ $DH_TYPE == "1" ]]; then
-		echo "dh none" >>/etc/openvpn/server.conf
-		echo "ecdh-curve $DH_CURVE" >>/etc/openvpn/server.conf
+		echo-shared "dh none" "/etc/openvpn/server" ".conf"
+		echo-shared "ecdh-curve $DH_CURVE" "/etc/openvpn/server" ".conf"
 	elif [[ $DH_TYPE == "2" ]]; then
-		echo "dh dh.pem" >>/etc/openvpn/server.conf
+		echo-shared "dh dh.pem" "/etc/openvpn/server" ".conf"
 	fi
 
 	case $TLS_SIG in
 	1)
-		echo "tls-crypt tls-crypt.key" >>/etc/openvpn/server.conf
+		echo-shared "tls-crypt tls-crypt.key" "/etc/openvpn/server" ".conf"
 		;;
 	2)
-		echo "tls-auth tls-auth.key 0" >>/etc/openvpn/server.conf
+		echo-shared "tls-auth tls-auth.key 0" "/etc/openvpn/server" ".conf"
 		;;
 	esac
 
-	echo "crl-verify crl.pem
-ca ca.crt
-cert $SERVER_NAME.crt
-key $SERVER_NAME.key
-auth $HMAC_ALG
-cipher $CIPHER
-ncp-ciphers $CIPHER
-tls-server
-tls-version-min 1.2
-tls-cipher $CC_CIPHER
-client-config-dir /etc/openvpn/ccd
-status /var/log/openvpn/status.log
-verb 3" >>/etc/openvpn/server.conf
+echo-shared "crl-verify crl.pem" "/etc/openvpn/server" ".conf"
+echo-shared "ca ca.crt" "/etc/openvpn/server" ".conf"
+echo-shared "crl-verify crl.pem" "/etc/openvpn/server" ".conf"
+echo-shared "cert $SERVER_NAME.crt" "/etc/openvpn/server" ".conf"
+echo-shared "key $SERVER_NAME.key" "/etc/openvpn/server" ".conf"
+echo-shared "auth $HMAC_ALG" "/etc/openvpn/server" ".conf"
+echo-shared "cipher $CIPHER" "/etc/openvpn/server" ".conf"
+echo-shared "ncp-ciphers $CIPHER" "/etc/openvpn/server" ".conf"
+echo-shared "tls-server" "/etc/openvpn/server" ".conf"
+echo-shared "tls-version-min 1.2" "/etc/openvpn/server" ".conf"
+echo-shared "tls-cipher $CC_CIPHER" "/etc/openvpn/server" ".conf"
+echo-shared "client-config-dir /etc/openvpn/ccd" "/etc/openvpn/server" ".conf"
+echo-shared "status /var/log/openvpn/status.log" "/etc/openvpn/server" ".conf"
+echo-shared "verb 3" "/etc/openvpn/server" ".conf"
 
 	# Create client-config-dir dir
 	mkdir -p /etc/openvpn/ccd
@@ -749,15 +835,107 @@ verb 3" >>/etc/openvpn/server.conf
 	# Apply sysctl rules
 	sysctl --system
 
+# Setup dummy interface and bridge for tap
+	if [[ $DEVICE == "1" || $DEVICE == "2" ]]; then
+		echo '#!/bin/bash
+
+eth="eth2"
+eth_ip_netmask="192.168.10.1/24"
+eth_broadcast="192.168.10.255"
+# eth_gateway="192.168.10.1"
+eth_mac="C8:D7:4A:4E:47:50"
+br="br0"
+tap="tap0"
+
+case $1 in
+start)
+# https://linuxconfig.org/configuring-virtual-network-interfaces-in-linux
+sudo modprobe dummy
+sudo ip link add $eth type dummy
+sudo ifconfig $eth hw ether $eth_mac
+sudo ip addr add $eth_ip_netmask brd + dev $eth label $eth:0
+sudo ifconfig $eth arp
+sudo ip link set dev $eth up
+
+# https://www.emaculation.com/doku.php/bridged_openvpn_server_setup
+
+    for t in $tap; do
+        openvpn --mktun --dev $t
+    done
+
+    brctl addbr $br
+    brctl addif $br $eth
+
+    for t in $tap; do
+        brctl addif $br $t
+    done
+
+    for t in $tap; do
+        ip addr flush dev $t
+        ip link set $t promisc on up
+    done
+	
+
+    ip addr flush dev $eth
+    ip link set $eth promisc on up
+
+    ip addr add $eth_ip_netmask broadcast $eth_broadcast dev $br
+    ip link set $br address $eth_mac
+    ip link set $br up
+    ;;
+stop)
+    sudo ip addr del $eth_ip_netmask brd + dev $eth label $eth:0
+    sudo ip link delete $eth type dummy
+    sudo rmmod dummy
+    sudo ip link set $br down
+    sudo brctl delbr $br
+
+    for t in $tap; do
+        openvpn --rmtun --dev $t
+    done
+
+    sudo ip link set $eth promisc off up
+    sudo ip addr add $eth_ip_netmask broadcast $eth_broadcast dev $eth
+    ;;
+*)
+    echo "Usage:  openvpn-bridge {start|stop}"
+    exit 1
+    ;;
+esac' > /etc/openvpn/openvpn-bridge.sh
+	chmod +x /etc/openvpn/openvpn-bridge.sh
+		# Handle the bridge and dummy interface via a systemd script
+	echo "[Unit]
+Description=iptables rules for OpenVPN
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/openvpn/openvpn-bridge.sh start
+ExecStop=/etc/openvpn/openvpn-bridge.sh stop
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target" >/etc/systemd/system/bridge-openvpn.service
+
+	# Enable service and run
+	systemctl daemon-reload
+	systemctl enable bridge-openvpn
+	systemctl start bridge-openvpn
+	fi
+
 	# If SELinux is enabled and a custom port was selected, we need this
 	if hash sestatus 2>/dev/null; then
 		if sestatus | grep "Current mode" | grep -qs "enforcing"; then
-			if [[ $PORT != '1194' ]]; then
-				semanage port -a -t openvpn_port_t -p "$PROTOCOL" "$PORT"
+			if [ ! -z ${PORT_TAP+x} ] && [[ $PORT_TAP != '1194' ]]; then
+				semanage port -a -t openvpn_port_t -p "$PROTOCOL" "$PORT_TAP"
+			fi
+			if [ ! -z ${PORT_TUN+x} ] && [[ $PORT_TUN != '1194' ]]; then
+				semanage port -a -t openvpn_port_t -p "$PROTOCOL" "$PORT_TUN"
 			fi
 		fi
 	fi
-
+	echo $DEVICE > /etc/openvpn/installed
 	# Finally, restart and enable OpenVPN
 	if [[ $OS == 'arch' || $OS == 'fedora' || $OS == 'centos' || $OS == 'oracle' ]]; then
 		# Don't modify package-provided service
@@ -769,8 +947,19 @@ verb 3" >>/etc/openvpn/server.conf
 		sed -i 's|/etc/openvpn/server|/etc/openvpn|' /etc/systemd/system/openvpn-server@.service
 
 		systemctl daemon-reload
-		systemctl enable openvpn-server@server
-		systemctl restart openvpn-server@server
+		if [[ $DEVICE == "1" || $DEVICE == "2" ]]; then
+			runAfter=$(grep -s "^After" /etc/systemd/system/openvpn-server@.service)
+			wants=$(grep -s "^Wants" /etc/systemd/system/openvpn-server@.service)
+			sed -i "s/$runAfter/$runAfter bridge-openvpn.service/g" /etc/systemd/system/openvpn-server@.service
+			sed -i "s/$wants/$wants bridge-openvpn.service/g" /etc/systemd/system/openvpn-server@.service
+			systemctl daemon-reload
+			systemctl enable openvpn-server@server-tap
+			systemctl restart openvpn-server@server-tap
+		fi
+		if [[ $DEVICE == "1" || $DEVICE == "3" ]]; then 
+			systemctl enable openvpn-server@server-tun
+			systemctl restart openvpn-server@server-tun
+		fi
 	elif [[ $OS == "ubuntu" ]] && [[ $VERSION_ID == "16.04" ]]; then
 		# On Ubuntu 16.04, we use the package from the OpenVPN repo
 		# This package uses a sysvinit service
@@ -785,9 +974,19 @@ verb 3" >>/etc/openvpn/server.conf
 		# Another workaround to keep using /etc/openvpn/
 		sed -i 's|/etc/openvpn/server|/etc/openvpn|' /etc/systemd/system/openvpn\@.service
 
-		systemctl daemon-reload
-		systemctl enable openvpn@server
-		systemctl restart openvpn@server
+		if [[ $DEVICE == "1" || $DEVICE == "2" ]]; then
+			runAfter=$(grep -s "^After" /etc/systemd/system/openvpn@.service)
+			wants=$(grep -s "^Wants" /etc/systemd/system/openvpn@.service)
+			sed -i "s/$runAfter/$runAfter bridge-openvpn.service/g" /etc/systemd/system/openvpn@.service
+			sed -i "s/$wants/$wants bridge-openvpn.service/g" /etc/systemd/system/openvpn@.service
+			systemctl daemon-reload
+			systemctl enable openvpn@server-tap
+			systemctl restart openvpn@server-tap
+		fi
+		if [[ $DEVICE == "1" || $DEVICE == "3" ]]; then 
+			systemctl enable openvpn@server-tun
+			systemctl restart openvpn@server-tun
+		fi
 	fi
 
 
@@ -795,24 +994,58 @@ verb 3" >>/etc/openvpn/server.conf
 	mkdir -p /etc/iptables
 
 	# Script to add rules
+	if [[ $DEVICE == "1" ]]; then
 	echo "#!/bin/sh
+iptables -t nat -I POSTROUTING 1 -s 10.8.0.0/24 -o $NIC -j MASQUERADE
+iptables -t nat -A POSTROUTING -s 192.168.10.0/24 -o $NIC -j MASQUERADE
+iptables -I INPUT 1 -i tun0 -j ACCEPT
+iptables -I FORWARD 1 -i $NIC -o tun0 -j ACCEPT
+iptables -I FORWARD 1 -i $NIC -o br0 -j ACCEPT
+iptables -I FORWARD 1 -i tun0 -o $NIC -j ACCEPT
+iptables -I FORWARD 1 -i br0 -o $NIC -j ACCEPT
+iptables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT_TAP -j ACCEPT
+iptables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT_TUN -j ACCEPT" >/etc/iptables/add-openvpn-rules.sh
+	elif [[ $DEVICE == "2" ]]; then
+			echo "#!/bin/sh
+iptables -t nat -A POSTROUTING -s 192.168.10.0/24 -o $NIC -j MASQUERADE
+iptables -I FORWARD 1 -i $NIC -o br0 -j ACCEPT
+iptables -I FORWARD 1 -i br0 -o $NIC -j ACCEPT
+iptables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT_TAP -j ACCEPT" >/etc/iptables/add-openvpn-rules.sh
+	elif [[ $DEVICE == "3" ]]; then
+			echo "#!/bin/sh
 iptables -t nat -I POSTROUTING 1 -s 10.8.0.0/24 -o $NIC -j MASQUERADE
 iptables -I INPUT 1 -i tun0 -j ACCEPT
 iptables -I FORWARD 1 -i $NIC -o tun0 -j ACCEPT
 iptables -I FORWARD 1 -i tun0 -o $NIC -j ACCEPT
-iptables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >/etc/iptables/add-openvpn-rules.sh
+iptables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT_TUN -j ACCEPT" >/etc/iptables/add-openvpn-rules.sh
 	fi
-
 	# Script to remove rules
+	if [[ $DEVICE == "1" ]]; then
 	echo "#!/bin/sh
+iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o $NIC -j MASQUERADE
+iptables -t nat -D POSTROUTING -s 192.168.10.0/24 -o $NIC -j MASQUERADE
+iptables -D INPUT -i tun0 -j ACCEPT
+iptables -D FORWARD -i $NIC -o tun0 -j ACCEPT
+iptables -D FORWARD -i $NIC -o br0 -j ACCEPT
+iptables -D FORWARD -i tun0 -o $NIC -j ACCEPT
+iptables -D FORWARD -i br0 -o $NIC -j ACCEPT
+iptables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT_TAP -j ACCEPT
+iptables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT_TUN -j ACCEPT" >/etc/iptables/rm-openvpn-rules.sh
+	elif [[ $DEVICE == "2" ]]; then
+	echo "#!/bin/sh
+iptables -t nat -D POSTROUTING -s 192.168.10.0/24 -o $NIC -j MASQUERADE
+iptables -D FORWARD -i $NIC -o br0 -j ACCEPT
+iptables -D FORWARD -i br0 -o $NIC -j ACCEPT
+iptables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT_TAP -j ACCEPT" >/etc/iptables/rm-openvpn-rules.sh
+	elif [[ $DEVICE == "3" ]]; then
+		echo "#!/bin/sh
 iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o $NIC -j MASQUERADE
 iptables -D INPUT -i tun0 -j ACCEPT
 iptables -D FORWARD -i $NIC -o tun0 -j ACCEPT
 iptables -D FORWARD -i tun0 -o $NIC -j ACCEPT
-iptables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >/etc/iptables/rm-openvpn-rules.sh
-
+iptables -D FORWARD -i br0 -o $NIC -j ACCEPT
+iptables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT_TUN -j ACCEPT" >/etc/iptables/rm-openvpn-rules.sh
 	fi
-
 	chmod +x /etc/iptables/add-openvpn-rules.sh
 	chmod +x /etc/iptables/rm-openvpn-rules.sh
 
@@ -842,33 +1075,40 @@ WantedBy=multi-user.target" >/etc/systemd/system/iptables-openvpn.service
 	fi
 
 	# client-template.txt is created so we have a template to add further users later
-	echo "client" >/etc/openvpn/client-template.txt
+	echo-shared "client" "/etc/openvpn/client-template" ".txt"
 	if [[ $PROTOCOL == 'udp' ]]; then
-		echo "proto udp" >>/etc/openvpn/client-template.txt
-		echo "explicit-exit-notify" >>/etc/openvpn/client-template.txt
+		echo-shared "proto udp" "/etc/openvpn/client-template" ".txt"
+		echo-shared "explicit-exit-notify" "/etc/openvpn/client-template" ".txt"
 	elif [[ $PROTOCOL == 'tcp' ]]; then
-		echo "proto tcp-client" >>/etc/openvpn/client-template.txt
+		echo-shared "proto tcp-client" "/etc/openvpn/client-template" ".txt"
 	fi
-	echo "remote $IP $PORT
-dev tun
-resolv-retry infinite
-nobind
-persist-key
-persist-tun
-remote-cert-tls server
-verify-x509-name $SERVER_NAME name
-auth $HMAC_ALG
-auth-nocache
-cipher $CIPHER
-tls-client
-tls-version-min 1.2
-tls-cipher $CC_CIPHER
-ignore-unknown-option block-outside-dns
-setenv opt block-outside-dns # Prevent Windows 10 DNS leak
-verb 3" >>/etc/openvpn/client-template.txt
+	if [[ $DEVICE == "1" || $DEVICE == "2" ]]; then
+		echo "remote $IP $PORT_TAP
+dev tap" >> /etc/openvpn/client-template-tap.txt
+	fi
+	if [[ $DEVICE == "1" || $DEVICE == "3" ]]; then
+		echo "remote $IP $PORT_TUN
+dev tun" >> /etc/openvpn/client-template-tun.txt
+	fi
+
+echo-shared "resolv-retry infinite" "/etc/openvpn/client-template" ".txt"
+echo-shared "nobind" "/etc/openvpn/client-template" ".txt"
+echo-shared "persist-key" "/etc/openvpn/client-template" ".txt"
+echo-shared "persist-tun" "/etc/openvpn/client-template" ".txt"
+echo-shared "remote-cert-tls server" "/etc/openvpn/client-template" ".txt"
+echo-shared "verify-x509-name $SERVER_NAME name" "/etc/openvpn/client-template" ".txt"
+echo-shared "auth $HMAC_ALG" "/etc/openvpn/client-template" ".txt"
+echo-shared "auth-nocache" "/etc/openvpn/client-template" ".txt"
+echo-shared "cipher $CIPHER" "/etc/openvpn/client-template" ".txt"
+echo-shared "tls-client" "/etc/openvpn/client-template" ".txt"
+echo-shared "tls-version-min 1.2" "/etc/openvpn/client-template" ".txt"
+echo-shared "tls-cipher $CC_CIPHER" "/etc/openvpn/client-template" ".txt"
+echo-shared "ignore-unknown-option block-outside-dns" "/etc/openvpn/client-template" ".txt"
+echo-shared "setenv opt block-outside-dns # Prevent Windows 10 DNS leak" "/etc/openvpn/client-template" ".txt"
+echo-shared "verb 3" "/etc/openvpn/client-template" ".txt"
 
 	if [[ $COMPRESSION_ENABLED == "y" ]]; then
-		echo "compress $COMPRESSION_ALG" >>/etc/openvpn/client-template.txt
+		echo-shared "compress $COMPRESSION_ALG" "/etc/openvpn/client-template" ".txt"
 	fi
 
 	# Generate the custom client.ovpn
@@ -884,6 +1124,28 @@ function newClient() {
 	until [[ $CLIENT =~ ^[a-zA-Z0-9_-]+$ ]]; do
 		read -rp "Client name: " -e CLIENT
 	done
+	
+	DEVICE=0
+
+	INSTALLED_DEVICE=$(cat /etc/openvpn/installed)
+	if [[ $INSTALLED_DEVICE == "1" ]]; then
+		echo "Select the device to run client on."
+			echo "   1) TAP"
+			echo "   2) TUN"
+		until [[ $DEVICE =~ ^[1-2]$ ]]; do
+			read -rp "Select device [1-20]: " -e -i 1 DEVICE
+		done
+	else
+		DEVICE=$INSTALLED_DEVICE
+	fi
+
+	if [[ $DEVICE == "1" ]]; then
+		SERVER_CONF_PATH="/etc/openvpn/server-tap.conf"
+		CLIENT_TEMP_PATH="/etc/openvpn/client-template-tap.txt"
+	elif [[ $DEVICE == "2" ]]; then
+		SERVER_CONF_PATH="/etc/openvpn/server-tun.conf"
+		CLIENT_TEMP_PATH="/etc/openvpn/client-template-tun.txt"
+	fi
 
 	echo ""
 	echo "Do you want to protect the configuration file with a password?"
@@ -932,14 +1194,14 @@ function newClient() {
 	fi
 
 	# Determine if we use tls-auth or tls-crypt
-	if grep -qs "^tls-crypt" /etc/openvpn/server.conf; then
+	if grep -qs "^tls-crypt" $SERVER_CONF_PATH; then #TODO bug
 		TLS_SIG="1"
-	elif grep -qs "^tls-auth" /etc/openvpn/server.conf; then
+	elif grep -qs "^tls-auth" $SERVER_CONF_PATH; then
 		TLS_SIG="2"
 	fi
 
 	# Generates the custom client.ovpn
-	cp /etc/openvpn/client-template.txt "$homeDir/$CLIENT.ovpn"
+	cp $CLIENT_TEMP_PATH "$homeDir/$CLIENT.ovpn"
 	{
 		echo "<ca>"
 		cat "/etc/openvpn/easy-rsa/pki/ca.crt"
@@ -1014,24 +1276,39 @@ function removeOpenVPN() {
 	read -rp "Do you really want to remove OpenVPN? [y/n]: " -e -i n REMOVE
 	if [[ $REMOVE == 'y' ]]; then
 		# Get OpenVPN port from the configuration
-		PORT=$(grep '^port ' /etc/openvpn/server.conf | cut -d " " -f 2)
-		PROTOCOL=$(grep '^proto ' /etc/openvpn/server.conf | cut -d " " -f 2)
+		if [[ -e /etc/openvpn/server-tap.conf ]]; then
+			PORT_TAP=$(grep '^port ' /etc/openvpn/server-tap.conf | cut -d " " -f 2)
+			PROTOCOL=$(grep '^proto ' /etc/openvpn/server-tap.conf | cut -d " " -f 2)
+		fi
+		if [[ -e /etc/openvpn/server-tun.conf ]]; then
+			PORT_TUN=$(grep '^port ' /etc/openvpn/server-tun.conf | cut -d " " -f 2)
+			PROTOCOL=$(grep '^proto ' /etc/openvpn/server-tun.conf | cut -d " " -f 2)
+		fi
 
 		# Stop OpenVPN
 		if [[ $OS =~ (fedora|arch|centos|oracle) ]]; then
-			systemctl disable openvpn-server@server
-			systemctl stop openvpn-server@server
+			systemctl disable openvpn-server@server-tap
+			systemctl disable openvpn-server@server-tun
+			systemctl stop openvpn-server@server-tun
+			systemctl stop openvpn-server@server-tap
 			# Remove customised service
 			rm /etc/systemd/system/openvpn-server@.service
 		elif [[ $OS == "ubuntu" ]] && [[ $VERSION_ID == "16.04" ]]; then
 			systemctl disable openvpn
 			systemctl stop openvpn
 		else
-			systemctl disable openvpn@server
-			systemctl stop openvpn@server
+			systemctl disable openvpn@server-tap
+			systemctl disable openvpn@server-tun
+			systemctl stop openvpn@server-tap
+			systemctl stop openvpn@server-tun
 			# Remove customised service
 			rm /etc/systemd/system/openvpn\@.service
 		fi
+		
+		# Remove bridge-openvpn service
+		systemctl disable bridge-openvpn
+		systemctl stop bridge-openvpn
+		rm /etc/systemd/system/bridge-openvpn.service
 
 		# Remove the iptables rules related to the script
 		systemctl stop iptables-openvpn
@@ -1045,8 +1322,12 @@ function removeOpenVPN() {
 		# SELinux
 		if hash sestatus 2>/dev/null; then
 			if sestatus | grep "Current mode" | grep -qs "enforcing"; then
-				if [[ $PORT != '1194' ]]; then
-					semanage port -d -t openvpn_port_t -p "$PROTOCOL" "$PORT"
+				if [ ! -z ${PORT_TAP+x} ] && [[ $PORT_TAP != '1194' ]]; then
+					semanage port -a -t openvpn_port_t -p "$PROTOCOL" "$PORT_TAP"
+				fi
+				
+				if [ ! -z ${PORT_TUN+x} ] && [[ $PORT_TUN != '1194' ]]; then
+					semanage port -a -t openvpn_port_t -p "$PROTOCOL" "$PORT_TUN"
 				fi
 			fi
 		fi
@@ -1116,8 +1397,8 @@ function manageMenu() {
 initialCheck
 
 # Check if OpenVPN is already installed
-if [[ -e /etc/openvpn/server.conf && $AUTO_INSTALL != "y" ]]; then
-	manageMenu
-else
+if ! openvpnInstalled; then
 	installOpenVPN
+else
+	manageMenu
 fi
