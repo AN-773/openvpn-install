@@ -214,12 +214,12 @@ function installQuestions() {
 		read -rp "Device [1-3]: " -e -i 1 DEVICE
 	done
 	if [[ $DEVICE == "1" ]]; then
-		askForPort TAP 1194
-		askForPort TUN 1195
+		askForPort TAP 443
+		askForPort TUN 1194
 	elif [[ $DEVICE == "2" ]]; then
-		askForPort TAP 1194
+		askForPort TAP 443
 	elif [[ $DEVICE == "3" ]]; then
-		askForPort TUN 1195
+		askForPort TUN 443
 	fi
 
 
@@ -270,7 +270,7 @@ function installQuestions() {
 	echo ""
 	echo "Do you want to use compression? It is not recommended since the VORACLE attack makes use of it."
 	until [[ $COMPRESSION_ENABLED =~ (y|n) ]]; do
-		read -rp"Enable compression? [y/n]: " -e -i n COMPRESSION_ENABLED
+		read -rp"Enable compression? [y/n]: " -e -i y COMPRESSION_ENABLED
 	done
 	if [[ $COMPRESSION_ENABLED == "y" ]]; then
 		echo "Choose which compression algorithm you want to use: (they are ordered by efficiency)"
