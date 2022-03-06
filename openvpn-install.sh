@@ -108,7 +108,7 @@ function initialCheck() {
 		exit 1
 	fi
 	checkOS
-	if [[ $OS != "debian" ]]; then
+	if [[ $OS != "debian" && $OS != "ubuntu" ]]; then
 		echo "Only debian supported"
 		exit 1
 	fi
