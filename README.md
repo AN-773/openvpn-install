@@ -5,9 +5,9 @@
 ![visitors](https://visitor-badge.glitch.me/badge?page_id=angristan.openvpn-install)
 [![Say Thanks!](https://img.shields.io/badge/Say%20Thanks-!-1EAEDB.svg)](https://saythanks.io/to/angristan)
 
-OpenVPN installer for Debian, Ubuntu, Fedora, CentOS, Arch Linux, Oracle Linux, Rocky Linux and AlmaLinux.
+OpenVPN installer for Debian, Ubuntu
 
-This script will let you setup your own secure VPN server in just a few seconds.
+This script will let you setup your own secure VPN server with TAP support in just a few seconds.
 
 You can also check out [wireguard-install](https://github.com/angristan/wireguard-install), a simple installer for a simpler, safer, faster and more modern VPN protocol.
 
@@ -16,7 +16,7 @@ You can also check out [wireguard-install](https://github.com/angristan/wireguar
 First, get the script and make it executable:
 
 ```bash
-curl -O https://raw.githubusercontent.com/angristan/openvpn-install/master/openvpn-install.sh
+curl -O https://raw.githubusercontent.com/AN-773/openvpn-install-tap-tun/master/openvpn-install.sh
 chmod +x openvpn-install.sh
 ```
 
@@ -26,7 +26,7 @@ Then run it:
 ./openvpn-install.sh
 ```
 
-You need to run the script as root and have the TUN module enabled.
+You need to run the script as root and have the TUN/TAP module enabled.
 
 The first time you run it, you'll have to follow the assistant and answer a few questions to setup your VPN server.
 
@@ -118,29 +118,25 @@ The script supports these OS and architectures:
 
 |                 | i386 | amd64 | armhf | arm64 |
 | --------------- | ---- | ----- | ----- | ----- |
-| Amazon Linux 2  | ❔   | ✅    | ❔    | ❔    |
-| Arch Linux      | ❔   | ✅    | ❔    | ✅    |
-| CentOS 7        | ✅   | ✅    | ✅    | ✅    |
-| CentOS 8        | ❌   | ✅    | ❌    | ✅    |
-| Debian >= 9     | ✅   | ✅    | ✅    | ✅    |
-| Fedora >= 27    | ❔   | ✅    | ❔    | ❔    |
-| Ubuntu 16.04    | ✅   | ✅    | ❌    | ❌    |
+| Amazon Linux 2  | ❔   | ❔    | ❔    | ❔    |
+| Arch Linux      | ❔   | ❔    | ❔    | ❔    |
+| CentOS 7        | ✅   | ❔    | ✅    | ❔    |
+| CentOS 8        | ❌   | ❔    | ❌    | ❔    |
+| Debian >= 9     | ✅   | ✅    | ✅    | ❔    |
+| Fedora >= 27    | ❔   | ❔    | ❔    | ❔    |
+| Ubuntu 16.04    | ❌   | ❌    | ❌    | ❌    |
 | Ubuntu >= 18.04 | ✅   | ✅    | ✅    | ✅    |
-| Oracle Linux 8  | ❌   | ✅    | ❌    | ❔    |
-| Rocky Linux 8   |  ❔  | ✅    |  ❔   | ❔    |
-| AlmaLinux 8     | ❌   | ✅    | ❌    | ❔    |
+| Oracle Linux 8  | ❌   | ❔    | ❔    | ❔    |
+| Rocky Linux 8   | ❔   | ❔    | ❔    | ❔    |
+| AlmaLinux 8     | ❌   | ❔    | ❔    | ❔    |
 
 To be noted:
 
-- It should work on Debian 8+ and Ubuntu 16.04+. But versions not in the table above are not officially supported.
 - The script requires `systemd`.
-- The script is regularly tested against `amd64` only.
 
 ## Fork
 
-This script is based on the great work of [Nyr and its contributors](https://github.com/Nyr/openvpn-install).
-
-Since 2016, the two scripts have diverged and are not alike anymore, especially under the hood. The main goal of the script was enhanced security. But since then, the script has been completely rewritten and a lot a features have been added. The script is only compatible with recent distributions though, so if you need to use a very old server or client, I advise using Nyr's script.
+This script is based on the great work of [Angristan](https://github.com/angristan/openvpn-install).
 
 ## FAQ
 
@@ -189,12 +185,6 @@ Solutions that provision a ready to use OpenVPN server based on this script in o
 
 - AWS using Terraform at [`openvpn-terraform-install`](https://github.com/dumrauf/openvpn-terraform-install)
 - Terraform AWS module [`openvpn-ephemeral`](https://registry.terraform.io/modules/paulmarsicloud/openvpn-ephemeral/aws/latest)
-
-## Contributing
-
-### Code formatting
-
-We use [shellcheck](https://github.com/koalaman/shellcheck) and [shfmt](https://github.com/mvdan/sh) to enforce bash styling guidelines and good practices. They are executed for each commit / PR with GitHub Actions, so you can check the configuration [here](https://github.com/angristan/openvpn-install/blob/master/.github/workflows/push.yml).
 
 ## Security and Encryption
 
