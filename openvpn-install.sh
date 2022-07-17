@@ -1110,6 +1110,14 @@ echo-shared "verb 3" "/etc/openvpn/client-template" ".txt"
 	if [[ $COMPRESSION_ENABLED == "y" ]]; then
 		echo-shared "compress $COMPRESSION_ALG" "/etc/openvpn/client-template" ".txt"
 	fi
+	# Prevent ipv6 leak
+	# source https://nixfaq.org/2021/04/how-to-block-local-ipv6-leak-when-connected-to-an-ipv4-only-openvpn-connection-on-gnu-linux.html
+echo-shared "ifconfig-ipv6 fd15:53b6:dead::2/64 fd15:53b6:dead::1" "/etc/openvpn/client-template" ".txt"
+echo-shared "redirect-gateway ipv6" "/etc/openvpn/client-template" ".txt"
+echo-shared "block-ipv6" "/etc/openvpn/client-template" ".txt"
+echo-shared "script-security 2" "/etc/openvpn/client-template" ".txt"
+echo-shared "up /etc/openvpn/update-resolv-conf" "/etc/openvpn/client-template" ".txt"
+echo-shared "down /etc/openvpn/update-resolv-conf" "/etc/openvpn/client-template" ".txt"
 
 	# Generate the custom client.ovpn
 	newClient
